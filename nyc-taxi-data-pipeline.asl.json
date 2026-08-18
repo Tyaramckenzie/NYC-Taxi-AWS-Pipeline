@@ -1,0 +1,94 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Lambda Invoke",
+  "States": {
+    "Lambda Invoke": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Output": "{% $states.result.Payload %}",
+      "Arguments": {
+        "Payload": "{% $states.input %}",
+        "FunctionName": "arn:aws:lambda:us-east-1:150911080424:function:nyc-taxi-s3-trigger:$LATEST"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Next": "RunGlueETL",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Comment": "NotifyFailure",
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "NotifyFailure": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "Message": "{% $states.input %}",
+        "TopicArn": "arn:aws:sns:us-east-1:150911080424:dtsc625-mckenzie-parquet3-failure"
+      },
+      "End": true
+    },
+    "RunGlueETL": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::glue:startJobRun",
+      "Arguments": {
+        "JobName": "bronze-to-silver-yellow-taxi"
+      },
+      "Next": "RunAthenaQuery",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "RunAthenaQuery": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution",
+      "Arguments": {
+        "QueryString": "SELECT COUNT(*) FROM silver.yellow_taxi;",
+        "WorkGroup": "primary",
+        "ResultConfiguration": {
+          "OutputLocation": "s3://nyc-taxi-analytics-mckenzie/gold/athena_query_results/"
+        }
+      },
+      "Next": "NotifySuccess",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "NotifyFailure"
+        }
+      ]
+    },
+    "NotifySuccess": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Arguments": {
+        "TopicArn": "arn:aws:sns:us-east-1:150911080424:parquet3-success",
+        "Message": "{% $states.input %}"
+      },
+      "End": true
+    }
+  },
+  "QueryLanguage": "JSONata"
+}
